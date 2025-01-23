@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Gmail Filter Generator</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+      background: #f4f4f4;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: #fff;
+      padding: 20px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.1);
+    }
+    h1 {
+      text-align: center;
+    }
+    .instructions p, .instructions li {
+      margin-bottom: 8px;
+    }
+    .instructions .tt {
+      font-family: monospace;
+    }
+    .file-section, .domain-section, .instructions {
+      margin-bottom: 20px;
+    }
+    #fileInput {
+      margin-bottom: 10px;
+      display: block;
+    }
+    label {
+      font-weight: bold;
+      display: inline-block;
+      margin-bottom: 5px;
+    }
+    .domain-section label {
+      font-weight: normal;
+      margin-left: 10px;
+    }
+    .output-section {
+      margin-top: 20px;
+    }
+    #resultArea {
+      width: 100%;
+      min-height: 100px;
+      white-space: pre-wrap;    /* Wrap text */
+      word-wrap: break-word;    /* Wrap long words */
+      margin-bottom: 10px;
+      resize: none;             /* Disallow manual resizing */
+      overflow-y: hidden;       /* Hide scrollbar for small text */
+    }
+    button {
+      cursor: pointer;
+      padding: 10px 15px;
+      border: none;
+      border-radius: 5px;
+      background: #007BFF;
+      color: #fff;
+      font-size: 16px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Gmail Filter Generator</h1>
+    
+    <div class="instructions">
+      <h3>How to Obtain the JSON File (Penn-Specific)</h3>
+      <ol>
+        <li><strong>Install the Penn Class List Scraper</strong>:
+          <ul>
+            <li>Download the <a href="https://github.com/jlumbroso/penn-classlist-scraper/releases/latest">Penn Class List Scraper</a> Chrome extension ZIP file.</li>
+            <li>Open Chrome, go to <span class="tt">chrome://extensions</span>, enable "Developer mode" in the top-right, and drag &amp; drop the ZIP file to install.</li>
+          </ul>
+        </li>
+        <li><strong>Extract Your Class List Data</strong>:
+          <ul>
+            <li>Visit <a href="https://courses.at.upenn.edu/">Courses@Penn</a>, select "Class Lists", ensure "Show Pics" is checked, and choose your section.</li>
+            <li>Click the Penn Class List Scraper extension icon to extract data. Once done, it'll download a JSON file.</li>
+          </ul>
+        </li>
+        <li><strong>Upload Your Data Here</strong>:
+          <ul>
+            <li>Click on the "Choose File" button below and select the downloaded JSON file.</li>
+          </ul>
+        </li>
+      </ol>
+
+      <h3>How to Turn JSON into a Gmail Filter</h3>
+      <p>1) <strong>Select a JSON file</strong> below and choose how you want the domain portion included (none, full, subdomain, or special "truncate if seas.upenn.edu").</p>
+      <p>2) Click <strong>Generate Filter</strong> to produce multiple <code>from:( ... )</code> chunks, each limited to 900 characters to comply with Gmail’s search limit.</p>
+      <p>3) Copy and paste each chunk into Gmail’s search bar. Then <strong>Create filter</strong> as described in <a href="https://support.google.com/mail/answer/6579?hl=en" target="_blank">Gmail’s official documentation</a>.</p>
+    </div>
+
+    <div class="file-section">
+      <label for="fileInput">Choose your JSON file:</label>
+      <input type="file" id="fileInput" accept=".json" />
+    </div>
+
+    <div class="domain-section">
+      <label>Domain Option:</label><br/>
+      <input type="radio" name="domainOption" value="prefixOnly" checked>
+      <label for="prefixOnly">Prefix only (<code>username@</code>)</label><br/>
+
+      <input type="radio" name="domainOption" value="fullDomain">
+      <label for="fullDomain">Full domain (<code>username@seas.upenn.edu</code>)</label><br/>
+
+      <input type="radio" name="domainOption" value="subDomain">
+      <label for="subDomain">Subdomain only (<code>username@seas</code> if domain is <code>seas.upenn.edu</code>)</label><br/>
+
+      <input type="radio" name="domainOption" value="subDomainExceptSeas">
+      <label for="subDomainExceptSeas">Subdomain, but if domain is <code>seas.upenn.edu</code>, truncate (<code>username@</code>)</label>
+    </div>
+
+    <button onclick="processFile()">Generate Filter</button>
+
+    <div class="output-section">
+      <label for="resultArea">Filter Chunks (copy each into Gmail):</label>
+      <textarea id="resultArea" readonly></textarea>
+      <button onclick="copyToClipboard()">Copy to Clipboard</button>
+    </div>
+  </div>
+
+  <script>
+    let studentData = null;
+
+    // Reads the file, processes JSON
+    function processFile() {
+      const fileInput = document.getElementById('fileInput');
+      const file = fileInput.files[0];
+      if (!file) {
+        alert('Please select a .json file first.');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        try {
+          studentData = JSON.parse(event.target.result);
+          if (!Array.isArray(studentData)) {
+            alert('The JSON file does not contain an array at the top level.');
+            return;
+          }
+          generateFilter();
+        } catch (err) {
+          alert('Error parsing JSON: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // Build the from:( ) lines and populate text area
+    function generateFilter() {
+      const domainOption = document.querySelector('input[name="domainOption"]:checked').value;
+      const allEmails = [];
+
+      studentData.forEach(entry => {
+        if (!entry.EmailAddress) return;
+        const email = transformEmail(entry.EmailAddress, domainOption);
+        if (email) {
+          allEmails.push(email);
+        }
+      });
+
+      // Build chunks under 900 characters
+      const chunks = buildChunks(allEmails, 900);
+
+      // Put them in the text area
+      const resultArea = document.getElementById('resultArea');
+      if (chunks.length === 0) {
+        resultArea.value = "(No valid email addresses found.)";
+      } else {
+        // Each chunk on its own line
+        resultArea.value = chunks.join('\n');
+      }
+
+      autoResizeTextarea(resultArea);
+    }
+
+    // Returns the email in the chosen domain style
+    function transformEmail(emailAddress, domainOption) {
+      const [user, domain] = emailAddress.split('@');
+      if (!user) return null;
+      // If there's no domain, fallback is just user@
+      const fallback = user + '@';
+
+      switch (domainOption) {
+        case "prefixOnly":
+          // user@
+          return user + '@';
+
+        case "fullDomain":
+          // user@domain
+          return domain ? (user + '@' + domain) : fallback;
+
+        case "subDomain":
+          if (!domain) return fallback;
+          // e.g. "seas.upenn.edu" => subDomain "seas"
+          const subPart = domain.split('.')[0];
+          return user + '@' + subPart;
+
+        case "subDomainExceptSeas":
+          if (!domain) return fallback;
+          if (domain === "seas.upenn.edu") {
+            // Truncate, i.e. user@
+            return user + '@';
+          } else {
+            const s = domain.split('.')[0];
+            return user + '@' + s;
+          }
+
+        default:
+          // fallback: do the entire domain
+          return domain ? (user + '@' + domain) : fallback;
+      }
+    }
+
+    // Build "from:(...)" lines under chunkSize length
+    function buildChunks(emails, chunkSize) {
+      const chunks = [];
+      let current = "from:(";
+      for (let i = 0; i < emails.length; i++) {
+        const email = emails[i];
+        // If current is "from:(", no '|' needed yet
+        const separator = (current === "from:(") ? "" : "|";
+
+        const addition = separator + email;
+        // If adding would exceed chunkSize (including final ")"), wrap up
+        if ((current.length + addition.length + 1) > chunkSize) {
+          current += ")";
+          chunks.push(current);
+          current = "from:(" + email;
+        } else {
+          current += addition;
+        }
+      }
+      // finalize last chunk if not empty
+      if (current !== "from:(") {
+        current += ")";
+        chunks.push(current);
+      }
+      return chunks;
+    }
+
+    // Auto-resize the textarea to fit the content
+    function autoResizeTextarea(textArea) {
+      textArea.style.height = "auto";
+      textArea.style.height = (textArea.scrollHeight) + "px";
+    }
+
+    // Copies the contents of the text area to the clipboard
+    function copyToClipboard() {
+      const textArea = document.getElementById('resultArea');
+      textArea.select();
+      textArea.setSelectionRange(0, 99999); // For mobile
+
+      navigator.clipboard.writeText(textArea.value)
+        .then(() => alert('Copied to clipboard!'))
+        .catch(err => alert('Failed to copy text: ' + err));
+    }
+  </script>
+</body>
+</html>
